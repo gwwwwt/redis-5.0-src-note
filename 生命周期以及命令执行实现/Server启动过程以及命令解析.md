@@ -25,14 +25,14 @@
 >     setlocale(LC_COLLATE,"");
 >     tzset(); /* Populates 'timezone' global. */
 >     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
->     srand(time(NULL)^getpid());
->     gettimeofday(&tv,NULL);
+>     srand(time(NULL)^getpid()); //srand()设置随机数生成种子, 之后调用rand()时会基于这个种子生成随机数
+>     gettimeofday(&tv,NULL); //系统时间设置到 tv 变量中
 > 
 >     char hashseed[16];
->     getRandomHexChars(hashseed,sizeof(hashseed));
->     dictSetHashFunctionSeed((uint8_t*)hashseed);
+>     getRandomHexChars(hashseed,sizeof(hashseed)); //生成16个随机 0-F之间的数字;
+>     dictSetHashFunctionSeed((uint8_t*)hashseed); //将hash函数seed复制给dict.c#dict_hash_function_seed
 >   
->     //检查程序是否以 sentinel 模式启动;
+>     //检查程序是否以 sentinel 模式启动, 1: 执行的程序是否是 redis-sentinel; 2: 参数中是否有 "--sentinel"
 >     server.sentinel_mode = checkForSentinelMode(argc,argv); 
 >   
 >     initServerConfig(); //本函数会在下面说明

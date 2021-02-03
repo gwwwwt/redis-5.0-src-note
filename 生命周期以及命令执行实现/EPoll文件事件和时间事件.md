@@ -49,7 +49,7 @@ typedef struct aeEventLoop {
        aeFileProc *rfileProc; 
        aeFileProc *wfileProc;
      
-       void *clientData; //附加数据？ 不太用到
+       void *clientData; //在监听到读/写事件后,调用处理函数时, clientData会作为处理函数的参数传入;
    } aeFileEvent;
    ```
 
@@ -234,10 +234,9 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
 fd参数: 需要监听的文件描述符
 mask参数: 标志, 标识需要监听fd参数的哪些事件
 proc: 当fd上发生mask标识的事件时, 需要调用的函数指针
-clientData: 一般为NULL, 附加数据
+clientData: 在调用proc时可能会用到的参数
 */
-int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData)
+int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData)
 {
     //1. 检查fd是否超过了最大监听描术符限制, 若有, 返回错误
     if (fd >= eventLoop->setsize) {
@@ -266,7 +265,9 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
 ##### 3.2.1  关于 mask参数
 
-> aeCreateFileEvent函数接受的mask参数定义在 ae.h 头文件中;
+> aeCreateFileEvent函数接受的mask参数定义在 ae.h 头文件中；
+>
+> > **需要注意AE_BARRIER标志的作用；**
 
 ```C 
 // ae.h
@@ -375,12 +376,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
     int processed = 0, numevents;
 
-    /* Nothing to do? return ASAP */
     // 1. 标志既不处理文件事件，也不处理时间事件，直接返回
     if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
 
-    /* 2. maxfd不为-1时表示有需要监听的文件事件; 或flags标志设置了处理时间事件(且未设置AE_DONT_WAIT)时,进行事件处理逻辑;
-       也就是说即使没有注册监听的文件fd, 也可以检查时间事件进行处理;
+    /* 2. maxfd不为-1时表示有需要监听的文件事件; 或flags标志设置了处理时间事件(且未设置AE_DONT_WAIT)时,
+    进行事件处理逻辑; 也就是说即使没有注册监听的文件fd, 也可以检查时间事件进行处理;
     */
     if (eventLoop->maxfd != -1 || ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
         int j;
@@ -388,7 +388,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         struct timeval tv, *tvp;
 
         // 3. 查找最近的时间事件； 并以最近的该事件指定的时间为差值来设置epoll_wait的timeout参数
-        //根据上面对aeEventLoop.timeEventHead字段的说明，它通内部字段prev/next组成了双向链表，可供遍历；通过when_sec/when_ms指定每个时间事件的下次发生时间；
+        //根据上面对aeEventLoop.timeEventHead字段的说明，它通内部字段prev/next组成了双向链表，可供遍历；
+      	// 通过when_sec/when_ms指定每个时间事件的下次发生时间；
    // aeSearchNearestTimer函数会遍历timeEventHead指定的链表，查找最近的时间事件（因为链表未排序）,见4.2节
         if (flags & AE_TIME_EVENTS && !(flags & AE_DONT_WAIT))
             shortest = aeSearchNearestTimer(eventLoop);
@@ -424,6 +425,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         /*
         4. aeApiPoll调用 epoll_wait函数; 它会在文件事件触发或到达timeout后返回; 
         而numevents为触发的文件事件数量( timeout情况下可能为0 );
+        
+        tvp中有值, 表示epoll_wait的超时时间; tvp中的值均为0, 表示不等待; tvp为NULL, 表示无超时时间, 一直等待;
         */
         numevents = aeApiPoll(eventLoop, tvp);
 
