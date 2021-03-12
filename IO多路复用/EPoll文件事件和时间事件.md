@@ -91,8 +91,7 @@ typedef struct aeEventLoop {
    在 ae.c中, 会依次检查当前操作系统是否支持 evport\epoll\kqueue IO多路复用实现, 如果支持, 则会将对应的 ae_***.c include到 ae.c中; 在这些 ae_***.c中, 都将对应的IO操作包装成了统一的函数名;
    
    如: aeApiCreate\aeApiAddEvent\aeApiDelEvent\aeApiPoll;
-   
-   通过这种方式, ae.c实现了统一的IO多路复用操作;
+   通过这种方式, ae.c实现了统一的IO多路复用接口;
    */
    // ae_epoll.c
    /*
@@ -103,7 +102,7 @@ typedef struct aeEventLoop {
        struct epoll_event *events;
    } aeApiState;
    ```
-
+   
 7. beforesleep 和 aftersleep: 在进入IO wait之前以及从wait状态返回之后的相关操作函数指针； 在创建aeEventLoop结构体时，它们初始化为NULL; 而在server.c main()函数启动时，将它们分别指向了 main.c 中定义的 **beforeSleep函数 和 afterSleep函数**，关于它们的说明， 见下面；
 
 ### 3. epoll文件事件处理实现
@@ -789,88 +788,3 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
 > }
 > ```
 >
-> 
-
-### 5. 关于 beforeSleep 和 afterSleep 函数
-
-> **见3.3节 ,  server.c main()函数中设置 aeEventLoop.{beforesleep和 aftersleep}字段; **
-
-
-
-#### 5.1 beforeSleep
-
-```C
-//server.c
-/* This function gets called every time Redis is entering the
- * main loop of the event driven library, that is, before to sleep
- * for ready file descriptors. */
-void beforeSleep(struct aeEventLoop *eventLoop) {
-    UNUSED(eventLoop);
-
-    /* Call the Redis Cluster before sleep function. Note that this function
-     * may change the state of Redis Cluster (from ok to fail or vice versa),
-     * so it's a good idea to call it before serving the unblocked clients
-     * later in this function. */
-    if (server.cluster_enabled) clusterBeforeSleep();
-
-    /* Run a fast expire cycle (the called function will return
-     * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && server.masterhost == NULL)
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
-
-    /* Send all the slaves an ACK request if at least one client blocked
-     * during the previous event loop iteration. */
-    if (server.get_ack_from_slaves) {
-        robj *argv[3];
-
-        argv[0] = createStringObject("REPLCONF",8);
-        argv[1] = createStringObject("GETACK",6);
-        argv[2] = createStringObject("*",1); /* Not used argument. */
-        replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3);
-        decrRefCount(argv[0]);
-        decrRefCount(argv[1]);
-        decrRefCount(argv[2]);
-        server.get_ack_from_slaves = 0;
-    }
-    /* Unblock all the clients blocked for synchronous replication
-     * in WAIT. */
-    if (listLength(server.clients_waiting_acks))
-        processClientsWaitingReplicas();
-
-    /* Check if there are clients unblocked by modules that implement
-     * blocking commands. */
-    moduleHandleBlockedClients();
-
-    /* Try to process pending commands for clients that were just unblocked. */
-    if (listLength(server.unblocked_clients))
-        processUnblockedClients();
-
-    /* Write the AOF buffer on disk */
-    flushAppendOnlyFile(0);
-
-    /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites();
-
-    /* Before we are going to sleep, let the threads access the dataset by
-     * releasing the GIL. Redis main thread will not touch anything at this
-     * time. */
-    if (moduleCount()) moduleReleaseGIL();
-}
-```
-
-
-
-#### 5.2 afterSleep
-
-```C
-// server.c
-
-/* This function is called immadiately after the event loop multiplexing
- * API returned, and the control is going to soon return to Redis by invoking
- * the different events callbacks. */
-void afterSleep(struct aeEventLoop *eventLoop) {
-    UNUSED(eventLoop);
-    if (moduleCount()) moduleAcquireGIL();
-}
-```
-
